@@ -1,0 +1,200 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish release
+    runs-on: ubuntu-latest
+
+    env:
+      CI: true
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+
+      # The tag names the version and package.json carries it; npm publishes
+      # whatever package.json says. Checking them here means a forgotten bump
+      # fails before anything is published, rather than shipping v0.1.1 bytes
+      # under a v0.1.0 tag.
+      - name: Validate release version
+        run: |
+          node <<'EOF'
+          const fs = require('node:fs');
+
+          const tag = process.env.GITHUB_REF_NAME;
+          const expectedVersion = tag.replace(/^v/, '');
+          const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+
+          if (packageJson.version !== expectedVersion) {
+            throw new Error(
+              `Release tag ${tag} does not match package.json version ${packageJson.version}`,
+            );
+          }
+
+          console.log(`Release version ${expectedVersion} verified.`);
+          EOF
+
+      # The CHANGELOG is the authority for what users read. Slicing the same
+      # "## <version>" heading the local release script wrote keeps the GitHub
+      # Release body — and therefore the plugin market's update dialog —
+      # identical to the notes committed in the repository.
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          node <<'EOF'
+          const fs = require('node:fs');
+
+          const tag = process.env.GITHUB_REF_NAME;
+          const version = tag.replace(/^v/, '');
+          const lines = fs.readFileSync('CHANGELOG.md', 'utf8').split(/\r?\n/);
+
+          let startIndex = -1;
+          let endIndex = lines.length;
+
+          for (let i = 0; i < lines.length; i += 1) {
+            if (!lines[i].startsWith('## ')) continue;
+
+            const heading = lines[i].slice(3).trim();
+
+            if (startIndex === -1) {
+              const matchesVersion =
+                heading === version ||
+                heading.startsWith(`${version} `) ||
+                heading === `[${version}]` ||
+                heading.startsWith(`[${version}] `);
+
+              if (matchesVersion) startIndex = i;
+            } else {
+              endIndex = i;
+              break;
+            }
+          }
+
+          if (startIndex === -1) {
+            throw new Error(
+              `Unable to find release notes for version ${version} in CHANGELOG.md`,
+            );
+          }
+
+          // Drop the heading itself: the Release title already carries the
+          // version, and repeating it directly above the body reads as noise in
+          // the update dialog.
+          const notes = lines.slice(startIndex + 1, endIndex).join('\n').trim();
+
+          if (notes === '') {
+            throw new Error(`The ${version} section in CHANGELOG.md has no notes`);
+          }
+
+          const releaseBody = [
+            notes,
+            '',
+            '## 安装 / Install',
+            '',
+            '在 DSH 插件市场搜索 **Port Kill**，或直接执行：',
+            '',
+            '```bash',
+            `dsh plugin --profile desktop add @wungjyan/dsh-port-kill@${version}`,
+            '```',
+            '',
+            '安装后重启 `dsh web`（新增 bundle 层需要重启），之后只改 client.js 会由 HMR 自动重载。',
+            '',
+            'Install from the DSH plugin market, or run the command above. Restart `dsh web`',
+            'once after installing a new bundle layer.',
+          ].join('\n');
+
+          fs.appendFileSync(
+            process.env.GITHUB_ENV,
+            `RELEASE_BODY<<EOF\n${releaseBody}\nEOF\n`,
+          );
+          EOF
+
+      # This package ships hand-written plain JavaScript, so a syntax error is
+      # the failure mode most likely to reach a user. It costs a second here.
+      - name: Syntax check
+        run: |
+          node --check host.js
+          node --check client.js
+
+      # A file missing from `files` in package.json breaks every installer, and
+      # a local directory install never exercises it — `files` does not filter a
+      # linked checkout. Check the real packed list once, here.
+      - name: Verify packed file list
+        run: |
+          npm pack --pack-destination /tmp
+          node <<'EOF'
+          const { execFileSync } = require('node:child_process');
+          const fs = require('node:fs');
+
+          const tarball = fs
+            .readdirSync('/tmp')
+            .filter((name) => name.endsWith('.tgz'))
+            .map((name) => `/tmp/${name}`)
+            .sort()
+            .pop();
+
+          if (tarball === undefined) {
+            throw new Error('npm pack produced no tarball');
+          }
+
+          const listing = execFileSync('tar', ['-tzf', tarball], { encoding: 'utf8' })
+            .split('\n')
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => line.replace(/^package\//, ''));
+
+          const required = [
+            'package.json',
+            'host.js',
+            'client.js',
+            'cordis.patch.yml',
+            'locale/en.json',
+            'locale/zh.json',
+            'icon.svg',
+            'README.md',
+            'CHANGELOG.md',
+            'LICENSE',
+          ];
+
+          const missing = required.filter((name) => !listing.includes(name));
+
+          if (missing.length > 0) {
+            throw new Error(
+              `Packed tarball is missing: ${missing.join(', ')}. Add them to "files" in package.json.`,
+            );
+          }
+
+          console.log(`Packed ${listing.length} files; every required entry is present.`);
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Port Kill ${{ github.ref_name }}
+          body: ${{ env.RELEASE_BODY }}
+          draft: false
+          prerelease: false
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public

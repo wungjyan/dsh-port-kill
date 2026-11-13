@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Dependencies. This package ships hand-written plain JavaScript with zero
+# runtime dependencies, so a node_modules here would only ever be a mistake.
+node_modules/
+
+# Local state and debug output
+*.log
+.env
+.env.*
+
+# tgz produced by `npm pack` while checking the published file list.
+*.tgz

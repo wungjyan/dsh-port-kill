@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Port Kill",
+    "description": "See which process behind any TCP port this machine listens on, re-verify that process is still the same one, then end it. Built for local port conflicts where a bare kill could hit a stale or unrelated PID."
+  }
+}

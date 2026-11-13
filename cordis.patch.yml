@@ -1,0 +1,12 @@
+# dsh-port-kill bundle patch.
+#
+# Mounts the Host half as a profile loader row. The Client module system
+# discovers this row, reads package.json's `dsh.client`, and serves client.js
+# as a browser bundle — no other wiring exists.
+#
+# The row id stays the short name (matching dsh-offwork-countdown) while the
+# package itself is scoped; `id` is the loader entry name, `name` is the npm
+# package to resolve.
+- insert:
+    - id: dsh-port-kill
+      name: '@wungjyan/dsh-port-kill'

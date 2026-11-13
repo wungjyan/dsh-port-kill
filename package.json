@@ -1,0 +1,73 @@
+{
+  "name": "@wungjyan/dsh-port-kill",
+  "version": "0.1.0",
+  "description": "Find the process behind any TCP port this machine is listening on, verify it is still the same process, then end it. / 查看本机监听的 TCP 端口与占用进程，复核进程身份后结束它。",
+  "type": "module",
+  "license": "MIT",
+  "author": "wungjyan",
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wungjyan/dsh-port-kill.git"
+  },
+  "homepage": "https://github.com/wungjyan/dsh-port-kill#readme",
+  "bugs": {
+    "url": "https://github.com/wungjyan/dsh-port-kill/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "port",
+    "port-kill",
+    "lsof",
+    "process",
+    "developer-tools"
+  ],
+  "exports": {
+    ".": "./host.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "host.js",
+    "client.js",
+    "settings.js",
+    "platforms/*.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs/*.md",
+    "docs/images/*.png",
+    "icon.svg",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "scripts": {
+    "check": "node --check host.js && node --check client.js",
+    "test": "node --test \"test/**/*.test.js\"",
+    "version:set": "node scripts/bump-version.mjs",
+    "release": "node scripts/release.mjs"
+  }
+}

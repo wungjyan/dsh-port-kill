@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Port Kill">
+  <title>Port Kill</title>
+  <!-- A connector/port socket with a severed link: the plugin's whole job is
+       "find what is plugged into this port, then unplug it". -->
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="#1f6feb"/>
+  <!-- port socket -->
+  <circle cx="32" cy="24" r="11" fill="none" stroke="#ffffff" stroke-width="3.2" stroke-opacity="0.94"/>
+  <circle cx="32" cy="24" r="4.2" fill="#ffffff"/>
+  <!-- plug stem -->
+  <path d="M32 35v7" stroke="#ffd166" stroke-width="3.6" stroke-linecap="round"/>
+  <!-- severed link: two broken halves with a gap -->
+  <path d="M20 48h7" stroke="#ffffff" stroke-width="3.4" stroke-linecap="round" stroke-opacity="0.92"/>
+  <path d="M37 48h7" stroke="#ffffff" stroke-width="3.4" stroke-linecap="round" stroke-opacity="0.92"/>
+  <path d="M29.5 44.5l5 7" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-opacity="0.55"/>
+</svg>
