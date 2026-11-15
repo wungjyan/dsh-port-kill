@@ -6,7 +6,13 @@ import {
   loadBackend,
   UNSUPPORTED_CAPABILITIES,
 } from '../platforms/index.js'
-import { parseNetstat, parseCimDate, parseProcessJson, processFilter } from '../platforms/win32.js'
+import {
+  forwardingProxyKind,
+  parseCimDate,
+  parseNetstat,
+  parseProcessJson,
+  processFilter,
+} from '../platforms/win32.js'
 import { capabilities as win32Capabilities } from '../platforms/win32.js'
 import { capabilities as posixCapabilities } from '../platforms/posix.js'
 import { parseLsofStream } from '../platforms/posix.js'
@@ -370,6 +376,24 @@ describe('Windows process query', () => {
   })
 })
 
+describe('Windows forwarding relays', () => {
+  test('recognises the WSL loopback relay', () => {
+    // Measured on Windows 11 + Docker Desktop: a published container port is
+    // held twice, `com.docker.backend.exe` on 0.0.0.0 and `wslrelay.exe` on
+    // [::1]. Ending the relay only breaks forwarding, so it is refused.
+    assert.equal(forwardingProxyKind('wslrelay.exe'), 'wsl')
+    assert.equal(forwardingProxyKind('wslhost.exe'), 'wsl')
+  })
+
+  test('leaves Docker names to the Docker proxy check', () => {
+    // `isDockerProxy` owns those names on every platform; a second owner would
+    // make the dialog pick the wrong sentence.
+    for (const name of ['com.docker.backend.exe', 'docker-proxy', 'vpnkit', 'node.exe', '--mode', '']) {
+      assert.equal(forwardingProxyKind(name), null, `${name} should not be a WSL relay`)
+    }
+  })
+})
+
 describe('platform capability flags', () => {
   test('POSIX attributes every field the identity check compares', () => {
     assert.equal(posixCapabilities.gracefulSignal, true)
@@ -385,6 +409,14 @@ describe('platform capability flags', () => {
     assert.equal(win32Capabilities.gracefulSignal, false)
     assert.equal(win32Capabilities.userAttribution, false)
     assert.equal(win32Capabilities.nameAttribution, false)
+  })
+
+  test('only Windows requires a provable ancestor chain', () => {
+    // The host refuses a kill when the parent map cannot be read, but only
+    // where the platform says the read is required: macOS and Linux keep
+    // walking whatever they can, exactly as before.
+    assert.equal(win32Capabilities.ancestorChainRequired, true)
+    assert.equal(posixCapabilities.ancestorChainRequired, undefined)
   })
 
   test('the unsupported platform claims nothing', () => {

@@ -1,5 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
+import { join } from 'node:path'
 
 import {
   DEFAULT_SETTINGS,
@@ -29,7 +30,9 @@ describe('settings defaults', () => {
 
   test('stores settings under the Harness data root', () => {
     const path = settingsFile()
-    assert.ok(path.endsWith('/port-kill/settings.json'), path)
+    // `path.join` picks the separator, so the expectation has to as well: a
+    // forward-slash literal only held on macOS and Linux.
+    assert.ok(path.endsWith(join('port-kill', 'settings.json')), path)
   })
 })
 

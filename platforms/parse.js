@@ -118,6 +118,13 @@ export function deriveProcessName(command) {
   // so the quoted form is unwrapped before any separator is looked for.
   const first = firstToken(trimmed)
   const base = first.slice(Math.max(first.lastIndexOf('/'), first.lastIndexOf('\\')) + 1)
+  // A command line that starts with a switch carries no image name in it. WSL
+  // starts its relay as ` --mode 1 --vm-id {...}` with an empty argv[0], and the
+  // flag was read as the program name: a Docker row showed up as `--mode` on
+  // Windows. `ps` always prints the image first, so this returns nothing only
+  // where the command line really has no name, and the caller falls back to the
+  // platform's process table instead.
+  if (base.startsWith('-')) return ''
   return base.trim()
 }
 

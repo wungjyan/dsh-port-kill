@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const clientSource = readFileSync(join(here, '..', 'client.js'), 'utf8')
+// Normalized to LF so the anchors below match on every checkout: this tree is
+// checked out with CRLF on Windows, and `'\n    }\n'` never matches CRLF.
+const clientSource = readFileSync(join(here, '..', 'client.js'), 'utf8').replace(/\r\n/g, '\n')
 
 /**
  * The bundle is one closure, so the pure helpers inside it cannot be imported.

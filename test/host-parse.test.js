@@ -230,6 +230,20 @@ describe('deriveProcessName', () => {
     assert.equal(deriveProcessName('"C:\\tools\\a b.exe'), 'a b.exe')
   })
 
+  test('returns nothing when the command line starts with a switch', () => {
+    // WSL launches its relay with an empty argv[0]:
+    // ` --mode 1 --vm-id {3c9fb2b6-...} --handle 2484`. Reading `--mode` as
+    // the program name labelled a Docker row that way on Windows, so the
+    // derivation returns nothing and the platform process table names it
+    // instead (wslrelay.exe).
+    assert.equal(
+      deriveProcessName(' --mode 1 --vm-id {3c9fb2b6-f2cc-4353-92d4-154559ed9c98} --handle 2484'),
+      '',
+    )
+    assert.equal(deriveProcessName('--flag=1'), '')
+    assert.equal(deriveProcessName('-x'), '')
+  })
+
   test('returns an empty string for an empty command', () => {
     assert.equal(deriveProcessName('   '), '')
   })

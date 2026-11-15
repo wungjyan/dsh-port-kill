@@ -241,6 +241,8 @@ window.__ModuleLoader__.load({
         'dockerNoKill': "这是 Docker 的端口转发进程，不是容器本身。在这里结束它不会停止容器，只会中断转发并影响其它已发布端口。请打开 Docker Desktop 停止容器「{name}」。",
         'dockerNoKillUnknown': "这是 Docker 的端口转发进程，不是容器本身。在这里结束它不会停止容器，只会中断转发。请打开 Docker Desktop 停止对应容器。",
         'dockerUnavailable': "Docker 不可用，无法确认这个端口背后的容器",
+        'wslBlockedBody': "端口 :{port} 由 Windows 的 WSL 端口转发进程「{name}」（PID {pid}）持有；真正监听它的是 WSL 里或容器里的服务，不是这个进程。",
+        'wslRelayNoKill': "在这里结束它不会停止 WSL 里或容器里的服务，只会中断这台机器上该端口的转发。请到 WSL 里停止对应服务，或先执行 wsl --shutdown 再重新启动。",
         'dockerBlockedTitle': "这个端口不能在这里结束",
         'dockerBlockedBody': "端口 :{port} 由 Docker 的端口转发进程「{name}」（PID {pid}）持有，容器本身运行在 Docker 里。",
         'dismiss': "知道了",
@@ -324,6 +326,8 @@ window.__ModuleLoader__.load({
         'dockerNoKill': "This is Docker's port-forwarding process, not the container. Ending it will not stop the container — it breaks forwarding and affects its other published ports. Stop the container «{name}» in Docker Desktop instead.",
         'dockerNoKillUnknown': "This is Docker's port-forwarding process, not the container. Ending it will not stop the container — it breaks forwarding. Stop the container in Docker Desktop instead.",
         'dockerUnavailable': "Docker is unavailable, so the container behind this port cannot be confirmed",
+        'wslBlockedBody': "Port :{port} is held by Windows' WSL port relay «{name}» (PID {pid}). What listens on it runs inside WSL or a container, not in this process.",
+        'wslRelayNoKill': "Ending it will not stop the service in WSL or the container — it only breaks this machine's forwarding for that port. Stop the service inside WSL, or run wsl --shutdown and start again.",
         'dockerBlockedTitle': "This port cannot be ended here",
         'dockerBlockedBody': "Port :{port} is held by Docker's port-forwarding process «{name}» (PID {pid}); the container itself runs inside Docker.",
         'dismiss': "Got it",
@@ -460,9 +464,14 @@ window.__ModuleLoader__.load({
      * process is. Saying the wrong one sends the user looking in the wrong place.
      * @param {object | null} capabilities - the published platform flags.
      * @param {Function} t - the translator.
+     * @param {'docker' | 'wsl' | null} [proxyKind] - which relay holds the port.
      * @returns {string} the explanation.
      */
-    function dockerProxyReason(capabilities, t) {
+    function dockerProxyReason(capabilities, t, proxyKind) {
+      // A WSL relay is not Docker: the sentence has to name what the process
+      // actually is, or the user goes looking in Docker Desktop for a service
+      // WSL started.
+      if (proxyKind === 'wsl') return t('wslRelayNoKill')
       if (capabilities !== null && capabilities.docker === false) return t('dockerUnavailable')
       return t('dockerNoKillUnknown')
     }
@@ -1021,9 +1030,13 @@ window.__ModuleLoader__.load({
 
       const container =
         target.container === null || target.container === undefined ? null : target.container
+      // A container the port claims is the best answer; only a row without one
+      // has to explain which relay is holding it.
+      const proxyKind = typeof target.proxyKind === 'string' ? target.proxyKind : null
+      const relay = container === null && proxyKind === 'wsl'
       const reason =
         container === null
-          ? dockerProxyReason(capabilities, t)
+          ? dockerProxyReason(capabilities, t, proxyKind)
           : format(t('dockerNoKill'), { name: container.name })
 
       return h(
@@ -1051,7 +1064,7 @@ window.__ModuleLoader__.load({
           h(
             'p',
             { className: 'pk-dialogBody' },
-            format(t('dockerBlockedBody'), {
+            format(relay ? t('wslBlockedBody') : t('dockerBlockedBody'), {
               port: target.port,
               name: target.processName,
               pid: target.pid,

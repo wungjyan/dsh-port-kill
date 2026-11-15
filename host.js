@@ -264,10 +264,22 @@ export async function listPorts() {
             service: container.service,
             containerPort: container.containerPort,
           }
-    // Set when the process looks like a proxy but no container claims the port:
-    // the port is Docker's, yet its owner cannot be named, so the UI must still
-    // refuse to kill it without pretending to know what is behind it.
-    item.dockerProxy = container === undefined && isDockerProxy(item.processName)
+    // A forwarding proxy holds the port on behalf of something this process
+    // cannot reach: Docker's own proxy, or — on Windows — the WSL relay that
+    // carries a loopback listener out of the VM. Signalling it does not stop
+    // what listens behind it, so the row must not offer a kill. Which relay it
+    // is decides the sentence the dialog shows, and a container the port does
+    // claim names the target itself, so it wins over both.
+    const relayKind =
+      typeof platform.forwardingProxyKind === 'function'
+        ? platform.forwardingProxyKind(item.processName)
+        : null
+    const proxyKind =
+      container !== undefined
+        ? null
+        : (relayKind ?? (isDockerProxy(item.processName) ? 'docker' : null))
+    item.dockerProxy = proxyKind !== null
+    item.proxyKind = proxyKind
   }
 
   const items = [...grouped.values()].sort((left, right) => {
@@ -314,7 +326,11 @@ let selfChainCache = null
 
 /**
  * The pids of this host process and its ancestors.
- * @returns {Promise<Set<number>>} the chain, always containing our own pid.
+ *
+ * `null` is not the same answer as an empty chain: it means the chain could
+ * not be read on a platform that requires it, and the caller refuses rather
+ * than letting a signal into the tree that draws the page.
+ * @returns {Promise<Set<number> | null>} the chain, always containing our own pid, or null when it could not be established.
  */
 async function selfChain() {
   if (selfChainCache !== null) return selfChainCache
@@ -326,12 +342,22 @@ async function selfChain() {
     return chain
   }
 
-  let walked = []
+  let walked = null
   try {
     walked = await platform.ancestorChain(process.pid, SELF_CHAIN_DEPTH)
   } catch {
+    walked = null
+  }
+
+  if (walked === null) {
+    // Windows says so through `ancestorChainRequired`: it cannot prove the
+    // chain, and guessing "no ancestors" would defeat the check this code
+    // exists for. Nothing is cached, so a later click retries the read
+    // instead of inheriting the verdict for the rest of the process.
+    if (platform.capabilities.ancestorChainRequired === true) return null
     walked = []
   }
+
   for (const pid of walked) {
     if (Number.isInteger(pid) && pid > 0) chain.add(pid)
   }
@@ -398,13 +424,25 @@ export function attributable(capabilities) {
 async function verifyIdentity(target) {
   const { pid, port, expectedStartedAtTs, expectedProcessName, expectedUser } = target
 
-  if (pid === process.pid || (await selfChain()).has(pid)) {
+  if (pid === process.pid) {
+    throw new RequestError(403, 'refused-self', '不能结束 DSH 自身的进程')
+  }
+
+  const chain = await selfChain()
+  if (chain === null) {
+    // Refusing is the only honest answer: without the parent map this check
+    // cannot tell a stranger from an ancestor of the process drawing the page.
+    throw new RequestError(
+      503,
+      'self-check-unavailable',
+      '无法读取进程的父子关系，为避免结束当前界面所在的进程链，已取消本次操作，请稍后重试',
+    )
+  }
+  if (chain.has(pid)) {
     throw new RequestError(
       403,
       'refused-self',
-      pid === process.pid
-        ? '不能结束 DSH 自身的进程'
-        : '不能结束 DSH 宿主所在进程链上的进程（结束了当前界面也会一起退出）',
+      '不能结束 DSH 宿主所在进程链上的进程（结束了当前界面也会一起退出）',
     )
   }
 
@@ -640,8 +678,16 @@ export async function checkPortRebound(request) {
     records[0]
 
   const info = (await platform.loadProcessInfo([successor.pid])).get(successor.pid)
+  // A platform that cannot attribute a socket name (Windows) reports none at
+  // all, so an absent one has to read exactly like an empty one: the old
+  // comparison printed `undefined` into the toast there. The command line is
+  // the next source, and the image name from the process table is the last —
+  // it is all that is left for a process whose command line is hidden.
+  const reported = typeof successor.processName === 'string' ? successor.processName : ''
   const processName =
-    successor.processName !== '' ? successor.processName : deriveProcessName(info?.command ?? '')
+    reported !== ''
+      ? reported
+      : deriveProcessName(info?.command ?? '') || String(info?.name ?? '').trim()
   const sameProcessName = processNameMatches(processName, previousProcessName)
   const rebound = successor.pid !== previousPid
 

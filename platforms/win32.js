@@ -74,6 +74,11 @@ export const capabilities = {
   canReadWorkingDirectory: false,
   userAttribution: false,
   nameAttribution: false,
+  // The self-protection walk reads the parent map from one CIM query. When that
+  // query fails, an empty chain must not read as "this process has no
+  // ancestors": that is the one failure this check cannot survive, so the host
+  // refuses the kill instead of allowing a signal into its own process tree.
+  ancestorChainRequired: true,
   // Both buttons really do the same thing here; the labels say so.
   signalLabels: { soft: 'TERM', hard: 'KILL' },
 }
@@ -385,17 +390,26 @@ export async function loadWorkingDirectories() {
 export async function ancestorChain(pid, depth) {
   const chain = [pid]
 
-  let parents
-  try {
-    const stdout = await runPowerShell(
-      'Get-CimInstance Win32_Process ' +
-        '| Select-Object ProcessId,ParentProcessId ' +
-        '| ConvertTo-Json -Compress',
-    )
-    parents = parseProcessJson(stdout)
-  } catch {
-    return chain
+  // One retry before giving up: the first CIM query after boot is the one that
+  // tends to time out, and a missing chain must reach the caller as a failure
+  // rather than as "no ancestors" (see `ancestorChainRequired`).
+  let parents = null
+  for (let attempt = 0; attempt < 2 && parents === null; attempt += 1) {
+    try {
+      const stdout = await runPowerShell(
+        'Get-CimInstance Win32_Process ' +
+          '| Select-Object ProcessId,ParentProcessId ' +
+          '| ConvertTo-Json -Compress',
+      )
+      const parsed = parseProcessJson(stdout)
+      // The table always holds at least the System process, so an empty parse
+      // means the command answered nothing usable, not that the machine is idle.
+      if (parsed.size > 0) parents = parsed
+    } catch {
+      // Fall through to the second attempt.
+    }
   }
+  if (parents === null) throw new Error('无法读取进程父子关系')
 
   let cursor = pid
   for (let level = 0; level < depth; level += 1) {
@@ -405,6 +419,28 @@ export async function ancestorChain(pid, depth) {
     cursor = parent
   }
   return chain
+}
+
+/**
+ * Process names Windows runs as a localhost forwarding relay.
+ *
+ * WSL2 does not bind a Linux listener on the Windows side; `wslrelay.exe` holds
+ * it and forwards. Docker Desktop publishes a container port the same way for
+ * the loopback half (`[::1]:3306`), which is why one published port can appear
+ * twice here: `com.docker.backend.exe` on `0.0.0.0` and this relay on `[::1]`.
+ *
+ * Ending the relay does not stop what listens inside the VM: it breaks
+ * forwarding for every port the relay carries. A row held by it therefore gets
+ * the same "cannot be ended here" treatment as Docker's own proxy, with an
+ * explanation that names the relay instead of a container.
+ * @param {string} processName - the row's process name.
+ * @returns {'wsl' | null} the relay kind, or null when the name is not one.
+ */
+export function forwardingProxyKind(processName) {
+  if (typeof processName !== 'string' || processName === '') return null
+  const lower = processName.toLowerCase()
+  const relays = ['wslrelay', 'wslhost']
+  return relays.some((name) => lower.includes(name)) ? 'wsl' : null
 }
 
 export { deriveProcessName, ipVersionOf, parseAddress, SELF_CHAIN_DEPTH }

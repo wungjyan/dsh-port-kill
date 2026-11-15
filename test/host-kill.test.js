@@ -2,33 +2,114 @@ import { test, describe, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 
+import { loadBackend } from '../platforms/index.js'
 import { listPorts, killProcess, checkPortRebound, scanPortsForPid } from '../host.js'
 
+//
+// What this platform can actually do, read before any test is registered: a
+// comparison the platform cannot make is skipped on purpose, and the signal it
+// reports follows the same declaration. That is not a weakened test — it is the
+// same contract the plugin publishes to its users.
+//
+const capabilities = (await loadBackend())?.capabilities ?? {}
+
 /**
- * Spawn a Python process that binds one port and sits there.
+ * Source of a tiny listener that owns the given ports until it is killed.
  *
- * Python rather than `nc` because it is guaranteed present on macOS and lets the
- * test pick the exact address to bind. The port is chosen from the ephemeral range
- * and re-tried on collision, so parallel test files do not fight over it.
- * @param {number} port - the port to bind.
+ * Node rather than Python: the runtime running this suite is present on every
+ * platform, and Windows has no `/usr/bin/python3`.
+ * @param {readonly number[]} ports - the ports to bind on loopback.
+ * @returns {string} a `-e` script body.
+ */
+function listenerSource(ports) {
+  return [
+    'const http = require("node:http")',
+    `const ports = ${JSON.stringify(ports)}`,
+    'let up = 0',
+    'for (const port of ports) {',
+    '  const server = http.createServer((request, response) => response.end("ok"))',
+    '  server.listen(port, "127.0.0.1", () => { if (++up === ports.length) console.log(process.pid) })',
+    '}',
+  ].join('\n')
+}
+
+/**
+ * Spawn a process that binds one port (or several) and sits there.
+ *
+ * The port is chosen from the ephemeral range and re-tried on collision, so
+ * parallel test files do not fight over it.
+ * @param {number | readonly number[]} ports - the port, or ports, to bind.
  * @returns {import('node:child_process').ChildProcess} the listener.
  */
-function spawnListener(port) {
-  return spawn(
-    '/usr/bin/python3',
-    [
-      '-c',
-      [
-        'import socket, time',
-        's = socket.socket(socket.AF_INET, socket.SOCK_STREAM)',
-        's.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)',
-        `s.bind(('127.0.0.1', ${String(port)}))`,
-        's.listen(1)',
-        'time.sleep(60)',
-      ].join('\n'),
-    ],
-    { stdio: 'ignore' },
-  )
+function spawnListener(ports) {
+  const list = Array.isArray(ports) ? ports : [ports]
+  const child = spawn(process.execPath, ['-e', listenerSource(list)], {
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+  spawned.push(child)
+  return child
+}
+
+/**
+ * Spawn a supervisor that restarts its listener whenever it dies.
+ *
+ * A shell loop was the original shape, but Windows has no `sh`. This is the same
+ * behaviour in node, and it reports each child pid on stdout so the test can
+ * stop a tree that Windows has no process groups for.
+ * @param {number} port - the port the listener keeps re-taking.
+ * @returns {{ child: import('node:child_process').ChildProcess, pids: number[] }} the supervisor and the children it reported.
+ */
+function spawnWatcher(port) {
+  // Every generated statement ends with a semicolon: a line starting with `(`
+  // after a line ending in `)` would be parsed as a call, which is a hazard no
+  // reviewer of generated code sees coming.
+  const source = [
+    'const { spawn } = require("node:child_process");',
+    `const childSource = ${JSON.stringify(listenerSource([port]))};`,
+    'function start() {',
+    '  const child = spawn(process.execPath, ["-e", childSource], { stdio: "ignore" });',
+    '  console.log(child.pid);',
+    '  child.on("exit", () => { setTimeout(start, 200); });',
+    '}',
+    'start();',
+  ].join('\n')
+  const child = spawn(process.execPath, ['-e', source], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+    windowsHide: true,
+  })
+  const pids = []
+  child.stdout.on('data', (chunk) => {
+    for (const line of String(chunk).split(/\r?\n/)) {
+      const pid = Number.parseInt(line.trim(), 10)
+      if (Number.isInteger(pid) && pid > 0 && !orphanPids.includes(pid)) {
+        pids.push(pid)
+        orphanPids.push(pid)
+      }
+    }
+  })
+  spawned.push(child)
+  return { child, pids }
+}
+
+/**
+ * Stop a supervisor and the listener it last started.
+ * @param {{ child: import('node:child_process').ChildProcess, pids: number[] }} watcher - the handle from {@link spawnWatcher}.
+ * @returns {void}
+ */
+function killWatcher(watcher) {
+  try {
+    watcher.child.kill('SIGKILL')
+  } catch {
+    // Already gone.
+  }
+  for (const pid of watcher.pids) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // Already gone.
+    }
+  }
 }
 
 /**
@@ -37,7 +118,9 @@ function spawnListener(port) {
  * @param {number} [timeoutMs] - how long to wait.
  * @returns {Promise<object>} the row that appeared.
  */
-async function waitForPort(port, timeoutMs = 5_000) {
+// A scan on Windows costs about a second (netstat plus one PowerShell call), so
+// the budget has to cover several of them before it gives up.
+async function waitForPort(port, timeoutMs = 20_000) {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const listed = await listPorts()
@@ -59,10 +142,20 @@ const PORT_B = 45_332
 /** @type {import('node:child_process').ChildProcess[]} */
 const spawned = []
 
+/** Listener pids a supervisor started, which no ChildProcess handle owns. */
+const orphanPids = []
+
 after(() => {
   for (const child of spawned) {
     try {
       child.kill('SIGKILL')
+    } catch {
+      // Already gone.
+    }
+  }
+  for (const pid of orphanPids) {
+    try {
+      process.kill(pid, 'SIGKILL')
     } catch {
       // Already gone.
     }
@@ -125,7 +218,11 @@ describe('kill identity checks', () => {
     )
   })
 
-  test('refuses when the process name does not match', async () => {
+  test('refuses when the process name does not match', {
+    // A platform that cannot read a name from the socket skips this comparison
+    // by design; asserting it here would assert a capability it does not have.
+    skip: capabilities.nameAttribution === true ? false : 'platform cannot attribute a socket name',
+  }, async () => {
     const row = await waitForPort(PORT_A)
 
     await assert.rejects(
@@ -141,7 +238,10 @@ describe('kill identity checks', () => {
     )
   })
 
-  test('refuses a process owned by another user', async () => {
+  test('refuses a process owned by another user', {
+    // Same reason as the name comparison: netstat reports no socket owner.
+    skip: capabilities.userAttribution === true ? false : 'platform cannot attribute a socket user',
+  }, async () => {
     const row = await waitForPort(PORT_A)
 
     await assert.rejects(
@@ -198,7 +298,10 @@ describe('kill identity checks', () => {
     })
 
     assert.equal(result.success, true)
-    assert.equal(result.signal, 'TERM')
+    // Windows has no catchable signal: both buttons terminate outright and the
+    // result says KILL. The platform declares which it is, so the test follows
+    // that declaration instead of a POSIX assumption.
+    assert.equal(result.signal, capabilities.gracefulSignal === true ? 'TERM' : 'KILL')
     assert.equal(result.pid, row.pid)
 
     const listed = await listPorts()
@@ -222,31 +325,9 @@ describe('kill identity checks', () => {
   })
 
   test('detects a rebound after a watcher re-claims the port', async () => {
-    // A shell loop that restarts its child whenever it dies: the shape of every
-    // dev-server watcher, and the case the rebound probe exists for.
-    const watcher = spawn(
-      '/bin/sh',
-      [
-        '-c',
-        [
-          'while true; do',
-          'python3 -c "',
-          'import socket, time',
-          's = socket.socket(socket.AF_INET, socket.SOCK_STREAM)',
-          's.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)',
-          `s.bind(('127.0.0.1', ${String(PORT_B)}))`,
-          's.listen(1)',
-          'time.sleep(20)',
-          '" &',
-          'CHILD=$!',
-          'wait $CHILD',
-          'sleep 0.2',
-          'done',
-        ].join('\n'),
-      ],
-      { stdio: 'ignore', detached: true },
-    )
-    spawned.push(watcher)
+    // A supervisor that restarts its listener whenever it dies: the shape of
+    // every dev-server watcher, and the case the rebound probe exists for.
+    const watcher = spawnWatcher(PORT_B)
 
     try {
       const row = await waitForPort(PORT_B)
@@ -277,11 +358,7 @@ describe('kill identity checks', () => {
       assert.equal(typeof rebound.message, 'string')
       assert.ok(rebound.message.includes(String(PORT_B)))
     } finally {
-      try {
-        process.kill(-watcher.pid, 'SIGKILL')
-      } catch {
-        // The group may already be gone.
-      }
+      killWatcher(watcher)
     }
   })
 })
@@ -353,25 +430,7 @@ async function freePort() {
  * @returns {import('node:child_process').ChildProcess} the dual listener.
  */
 function spawnDualListener(first, second) {
-  return spawn(
-    '/usr/bin/python3',
-    [
-      '-c',
-      [
-        'import socket, time',
-        'def listen(port):',
-        '    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)',
-        '    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)',
-        '    s.bind(("127.0.0.1", port))',
-        '    s.listen(1)',
-        '    return s',
-        `a = listen(${String(first)})`,
-        `b = listen(${String(second)})`,
-        'time.sleep(60)',
-      ].join('\n'),
-    ],
-    { stdio: 'ignore' },
-  )
+  return spawnListener([first, second])
 }
 
 /**
