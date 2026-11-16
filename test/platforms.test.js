@@ -1,5 +1,10 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { resolveBinary, run } from '../platforms/exec.js'
 
 import {
   backendFor,
@@ -444,5 +449,44 @@ describe('start-time contract across platforms', () => {
     assert.equal(round.sortable, parsed.sortable)
     // lstart has no sub-second field, so the comparison is to the second.
     assert.equal(round.epochMs, Math.floor(parsed.epochMs / 1000) * 1000)
+  })
+})
+
+describe('finding a system binary', () => {
+  test('takes the first candidate that exists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pk-bin-'))
+    try {
+      const real = join(dir, 'lsof')
+      writeFileSync(real, '')
+      // A missing candidate before an existing one must not stop the search:
+      // the whole point is that the layout differs per distribution.
+      assert.equal(resolveBinary(['/nope/first', real, '/nope/last'], 'lsof'), real)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('falls back to the bare name so PATH still gets a say', () => {
+    assert.equal(resolveBinary(['/nope/a', '/nope/b'], 'lsof'), 'lsof')
+  })
+})
+
+describe('how a failed command is reported', () => {
+  test('a missing binary is missing, not a timeout', async () => {
+    // The two used to collapse into one message: a spawn failure carries
+    // `signal: undefined`, which an `!== null` test read as "killed by a
+    // signal". Ubuntu shipped without /usr/sbin/lsof and the report said
+    // "timed out", which sent the search to the wrong place entirely.
+    await assert.rejects(
+      run('/nonexistent/lsof-binary', [], { timeoutMs: 1_000 }),
+      (error) => /找不到可执行文件/.test(error.message) && !/超时/.test(error.message),
+    )
+  })
+
+  test('a command that outlives its ceiling is a timeout', async () => {
+    await assert.rejects(
+      run(process.execPath, ['-e', 'setTimeout(function () {}, 5000)'], { timeoutMs: 200 }),
+      (error) => /超时/.test(error.message),
+    )
   })
 })

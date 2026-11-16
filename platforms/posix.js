@@ -8,7 +8,7 @@
  */
 import { userInfo } from 'node:os'
 
-import { run } from './exec.js'
+import { resolveBinary, run } from './exec.js'
 import {
   deriveProcessName,
   ipVersionOf,
@@ -18,13 +18,42 @@ import {
 } from './parse.js'
 
 /**
- * Absolute paths: a Finder- or Dock-launched app inherits a minimal PATH, and
- * Homebrew's lsof would be found only from a login shell.
+ * Where `lsof` and `ps` live.
  *
- * Linux keeps the same paths, so one constant pair covers both.
+ * An absolute path is preferred because a Finder- or Dock-launched app inherits
+ * a minimal PATH, but the directory is not the same everywhere: macOS keeps
+ * `lsof` in `/usr/sbin`, Ubuntu installs it into `/usr/bin`, and Homebrew puts it
+ * under its own prefix. A single hardcoded path is therefore a claim about one
+ * machine's layout, and the one it named was missing on Ubuntu — every scan
+ * there failed with "lsof timed out", which pointed at the wrong problem.
+ *
+ * The bare name is the last resort: PATH is the OS's own answer, and if that
+ * misses too, the caller gets an explicit "找不到可执行文件" instead of a hang.
  */
-const LSOF = '/usr/sbin/lsof'
-const PS = '/bin/ps'
+const LSOF_CANDIDATES = [
+  '/usr/sbin/lsof',
+  '/usr/bin/lsof',
+  '/bin/lsof',
+  '/usr/local/sbin/lsof',
+  '/usr/local/bin/lsof',
+  '/opt/homebrew/sbin/lsof',
+  '/opt/homebrew/bin/lsof',
+]
+const PS_CANDIDATES = ['/bin/ps', '/usr/bin/ps', '/usr/local/bin/ps']
+
+/** Resolved once: the answer cannot change while this process runs. */
+let lsofBinary = null
+let psBinary = null
+
+function lsof() {
+  if (lsofBinary === null) lsofBinary = resolveBinary(LSOF_CANDIDATES, 'lsof')
+  return lsofBinary
+}
+
+function ps() {
+  if (psBinary === null) psBinary = resolveBinary(PS_CANDIDATES, 'ps')
+  return psBinary
+}
 
 /** Command ceilings. A scan that outlives these is treated as a failure, not a hang. */
 const LSOF_TIMEOUT_MS = 5_000
@@ -55,7 +84,7 @@ export const capabilities = {
 
 /** Run `lsof`, treating its empty-result exit code as a successful scan. */
 function runLsof(args) {
-  return run(LSOF, args, { timeoutMs: LSOF_TIMEOUT_MS, emptyExitCode: LSOF_EMPTY_EXIT })
+  return run(lsof(), args, { timeoutMs: LSOF_TIMEOUT_MS, emptyExitCode: LSOF_EMPTY_EXIT })
 }
 
 /**
@@ -67,7 +96,7 @@ function runLsof(args) {
  * English, passed as the child's environment so concurrent scans cannot race.
  */
 function runPs(args) {
-  return run(PS, args, { timeoutMs: PS_TIMEOUT_MS, env: { LC_ALL: 'C', LANG: 'C' } })
+  return run(ps(), args, { timeoutMs: PS_TIMEOUT_MS, env: { LC_ALL: 'C', LANG: 'C' } })
 }
 
 /**

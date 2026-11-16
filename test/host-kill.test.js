@@ -244,6 +244,10 @@ describe('kill identity checks', () => {
   }, async () => {
     const row = await waitForPort(PORT_A)
 
+    // A name no account can hold. Hardcoding "root" read as another user on a
+    // normal machine, but when the suite runs as root it *is* the current user,
+    // the refusal never fires, and the request proceeds to a real kill — which
+    // took the listener down and failed the later test that needed it.
     await assert.rejects(
       killProcess({
         pid: row.pid,
@@ -251,7 +255,7 @@ describe('kill identity checks', () => {
         force: false,
         expectedStartedAtTs: row.startedAtTs,
         expectedProcessName: row.processName,
-        expectedUser: 'root',
+        expectedUser: 'another-user-entirely',
       }),
       (error) => error.code === 'refused-user',
     )

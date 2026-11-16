@@ -6,9 +6,30 @@
  * platform never touches the others.
  */
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
 
 /** Room for stdout on a machine with many listeners. */
 export const MAX_BUFFER = 8 << 20
+
+/**
+ * The first candidate that exists on this machine, or the fallback.
+ *
+ * An absolute path is preferred because a Finder- or Dock-launched app inherits
+ * a minimal PATH. But *which* absolute path holds a tool is not a fact about the
+ * platform — macOS keeps `lsof` in `/usr/sbin`, Ubuntu installs it into
+ * `/usr/bin` — so hardcoding one path is an assumption that breaks on the next
+ * distribution. The fallback is the bare name, which the OS resolves through
+ * PATH when no candidate matched.
+ * @param {readonly string[]} candidates - absolute paths to try, in order.
+ * @param {string} fallback - the bare command name.
+ * @returns {string} the path to run.
+ */
+export function resolveBinary(candidates, fallback) {
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate
+  }
+  return fallback
+}
 
 /**
  * Run one system command and resolve with its stdout.
@@ -46,12 +67,16 @@ export function run(file, args, { timeoutMs, emptyExitCode, env }) {
           resolve(String(stdout ?? ''))
           return
         }
-        if (error.killed === true || error.signal !== null) {
-          reject(new Error(`${file} 超时（${String(timeoutMs)}ms）后被终止`))
-          return
-        }
+        // A spawn failure carries `code` but no signal at all — `signal` is
+        // `undefined`, not `null` — so testing the signal first classified every
+        // missing binary as a timeout and hid the real cause. This order is the
+        // one that tells the truth about which of the two happened.
         if (error.code === 'ENOENT') {
           reject(new Error(`找不到可执行文件 ${file}，这个平台的端口扫描依赖它`))
+          return
+        }
+        if (error.killed === true || typeof error.signal === 'string') {
+          reject(new Error(`${file} 超时（${String(timeoutMs)}ms）后被终止`))
           return
         }
         const detail = String(error.stderr ?? '').trim()
