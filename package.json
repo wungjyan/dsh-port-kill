@@ -47,6 +47,7 @@
     "icon.svg",
     "assets/*.png",
     "README.md",
+    "README.en.md",
     "CHANGELOG.md",
     "LICENSE"
   ],
