@@ -44,8 +44,6 @@
     "platforms/*.js",
     "cordis.patch.yml",
     "locale/*.json",
-    "docs/*.md",
-    "docs/images/*.png",
     "icon.svg",
     "README.md",
     "CHANGELOG.md",

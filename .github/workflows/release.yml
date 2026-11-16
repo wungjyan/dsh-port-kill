@@ -7,6 +7,10 @@ on:
 
 permissions:
   contents: write
+  # `npm publish --provenance` signs its attestation with the workflow's OIDC
+  # token. Without this the publish step is the only thing that fails, after the
+  # release has already been created.
+  id-token: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -111,16 +115,22 @@ jobs:
             '',
             '## 安装 / Install',
             '',
-            '在 DSH 插件市场搜索 **Port Kill**，或直接执行：',
+            '在 DSH 插件市场搜索 **Port Kill** 安装。',
+            '',
+            // Not `--profile desktop`: the CLI refuses that name outright
+            // ("managed exclusively by the Electron application"), so the one
+            // command this body offered could never have run. `web` is the
+            // profile a CLI-launched `dsh web` uses.
+            '命令行安装（`dsh web` 用的 `web` profile）：',
             '',
             '```bash',
-            `dsh plugin --profile desktop add @wungjyan/dsh-port-kill@${version}`,
+            `dsh plugin --profile web add @wungjyan/dsh-port-kill@${version}`,
             '```',
             '',
-            '安装后重启 `dsh web`（新增 bundle 层需要重启），之后只改 client.js 会由 HMR 自动重载。',
+            '装完重启一次，新增的 bundle 层需要重启才加载。',
             '',
-            'Install from the DSH plugin market, or run the command above. Restart `dsh web`',
-            'once after installing a new bundle layer.',
+            'Install from the DSH plugin market, or run the command above, then restart once',
+            'so the new bundle layer loads.',
           ].join('\n');
 
           fs.appendFileSync(

@@ -67,19 +67,16 @@ Windows 上转发进程是 `com.docker.backend.exe`，而容器的回环半边�
 
 ## 安装
 
-**当前未发布到 npm**，用本地目录安装。
+在 DSH 插件市场搜索 **Port Kill**，或者用命令行：
 
 ```bash
-git clone https://github.com/wungjyan/dsh-port-kill.git
+dsh plugin --profile web add @wungjyan/dsh-port-kill
 ```
 
-把仓库放在一个以后不会挪动、不会删除的位置，然后：
+装完**重启一次 DSH**——新增的 bundle 层需要重启才加载。
 
-1. 打开 DSH → **插件** → **添加插件**
-2. 选中 `dsh-port-kill` 这个**目录**（不是里面的某个文件）
-3. 重启 DSH
-
-> 为什么要固定位置：DSH 装本地插件是链接过去的，不是复制。目录一挪，插件就失效了。
+也可以从本地目录装：**插件** → **添加插件** → 选中仓库目录。这种方式是链接不是复制，
+目录以后不能挪动或删除。
 
 装好后左栏会出现「端口管理」（英文界面下是「Port Kill」）。
 
