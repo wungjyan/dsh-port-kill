@@ -4,6 +4,8 @@
 
 一个 DeepSeek Harness（DSH）插件。左栏一个入口，中间一整页列出本机所有 TCP 监听端口；每一行说清楚是哪个进程、哪个目录、什么时候启动的。点「结束」之前，它会重新扫一遍端口，确认还是你看到的那个进程。
 
+![端口列表与结束确认：列表逐行给出进程、工作目录、PID 与启动时间；弹窗在结束前列出会被一起释放的全部端口](assets/port-list.png)
+
 ## 和原版的关系
 
 原版是 [wungjyan/port-kill](https://github.com/wungjyan/port-kill)——一个 macOS 桌面应用，基于 Tauri 2、Vue 3 与 Rust，独立运行，不依赖 DSH。
